@@ -2,5 +2,7 @@
   "name": "VibeFlow",
   "description": "VibeFlow — Immersive dark-mode web music player with curated playlists, real-time audio playback, and queue management.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
