@@ -1,0 +1,103 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Google Sans Code", "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: dark;
+  --vf-bg-obsidian: #09090b;
+  --vf-surface: #131315;
+  --vf-surface-low: #1c1b1d;
+  --vf-surface-container: #201f22;
+  --vf-surface-high: #2a2a2c;
+  --vf-surface-highest: #353437;
+  --vf-mint: #1ed760;
+  --vf-mint-bright: #4cf479;
+  --vf-violet: #6366f1;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--vf-bg-obsidian);
+  color: #e5e1e4;
+  overflow: hidden;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom subtle dark scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* Animated Equalizer Bars */
+@keyframes vf-eq-1 {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+
+@keyframes vf-eq-2 {
+  0%, 100% { transform: scaleY(0.85); }
+  45% { transform: scaleY(0.28); }
+  75% { transform: scaleY(0.95); }
+}
+
+@keyframes vf-eq-3 {
+  0%, 100% { transform: scaleY(0.45); }
+  35% { transform: scaleY(0.95); }
+  70% { transform: scaleY(0.3); }
+}
+
+@keyframes vf-eq-4 {
+  0%, 100% { transform: scaleY(0.7); }
+  50% { transform: scaleY(0.3); }
+}
+
+.animate-eq-1 {
+  animation: vf-eq-1 0.85s ease-in-out infinite;
+  transform-origin: bottom;
+}
+.animate-eq-2 {
+  animation: vf-eq-2 0.72s ease-in-out infinite;
+  transform-origin: bottom;
+}
+.animate-eq-3 {
+  animation: vf-eq-3 0.94s ease-in-out infinite;
+  transform-origin: bottom;
+}
+.animate-eq-4 {
+  animation: vf-eq-4 0.68s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-eq-1,
+  .animate-eq-2,
+  .animate-eq-3,
+  .animate-eq-4 {
+    animation: none;
+  }
+}
