@@ -1,4 +1,14 @@
-import { AudioWaveform, Heart, Home, Library, Plus, Search, X } from 'lucide-react';
+import React, { useRef } from 'react';
+import {
+  AudioWaveform,
+  Heart,
+  Home,
+  Library,
+  Plus,
+  Search,
+  Upload,
+  X,
+} from 'lucide-react';
 import { usePlayer } from '../context/PlayerContext';
 import { CoverImage } from './CoverImage';
 import { EqualizerIcon } from './EqualizerIcon';
@@ -15,16 +25,38 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
     allPlaylists,
     currentPlaylistId,
     isPlaying,
+    isUploading,
     setIsCreateModalOpen,
+    uploadAudioFiles,
   } = usePlayer();
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const navigateTo = (view: Parameters<typeof setActiveView>[0]) => {
     setActiveView(view);
     onCloseMobile();
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      void uploadAudioFiles(e.target.files);
+      e.target.value = '';
+      onCloseMobile();
+    }
+  };
+
   const sidebarContent = (
     <div className="flex flex-col h-full bg-[#0E0E10] border-r border-white/[0.06] select-none">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".mp3,audio/mpeg,audio/*"
+        multiple
+        onChange={handleFileChange}
+        className="hidden"
+        aria-label="Upload MP3 files"
+      />
+
       {/* Brand Wordmark */}
       <div className="flex items-center justify-between px-5 pt-5 pb-4">
         <button
@@ -86,15 +118,27 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
             <Library className="w-4 h-4" />
             <span>Your Library</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsCreateModalOpen(true)}
-            aria-label="Create new playlist"
-            title="Create playlist"
-            className="p-1.5 rounded-lg text-[#A1A1AA] hover:text-white hover:bg-white/10 transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760]"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={isUploading}
+              onClick={() => fileInputRef.current?.click()}
+              aria-label="Upload MP3 file"
+              title="Upload MP3"
+              className="p-1.5 rounded-lg text-[#A1A1AA] hover:text-[#1ED760] hover:bg-white/10 disabled:opacity-40 transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760]"
+            >
+              <Upload className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsCreateModalOpen(true)}
+              aria-label="Create new playlist"
+              title="Create playlist"
+              className="p-1.5 rounded-lg text-[#A1A1AA] hover:text-white hover:bg-white/10 transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760]"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Playlists List */}
@@ -104,6 +148,7 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
               activeView.type === 'playlist' && activeView.playlistId === playlist.id;
             const isCurrentPlayingContext = currentPlaylistId === playlist.id;
             const isLikedPlaylist = playlist.id === 'liked-songs';
+            const isUploadsPlaylist = playlist.id === 'uploaded-tracks';
 
             return (
               <button
@@ -119,6 +164,10 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                 {isLikedPlaylist ? (
                   <div className="w-10 h-10 rounded-md shrink-0 flex items-center justify-center bg-gradient-to-br from-[#6366F1] to-[#1ED760]">
                     <Heart className="w-4 h-4 text-white fill-current" />
+                  </div>
+                ) : isUploadsPlaylist ? (
+                  <div className="w-10 h-10 rounded-md shrink-0 flex items-center justify-center bg-gradient-to-br from-[#1ED760]/30 to-[#201F22] border border-[#1ED760]/30">
+                    <Upload className="w-4 h-4 text-[#1ED760]" />
                   </div>
                 ) : (
                   <CoverImage
@@ -138,7 +187,12 @@ export function Sidebar({ mobileOpen, onCloseMobile }: SidebarProps) {
                     {playlist.title}
                   </div>
                   <div className="text-xs text-[#A1A1AA] truncate tabular-nums">
-                    {playlist.isCustom ? 'Custom' : 'Playlist'} · {playlist.trackIds.length}{' '}
+                    {playlist.isCustom
+                      ? 'Custom'
+                      : isUploadsPlaylist
+                        ? 'Local MP3s'
+                        : 'Playlist'}{' '}
+                    · {playlist.trackIds.length}{' '}
                     {playlist.trackIds.length === 1 ? 'song' : 'songs'}
                   </div>
                 </div>

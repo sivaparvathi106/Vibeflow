@@ -1,4 +1,4 @@
-import { Heart, Pause, Play } from 'lucide-react';
+import { Heart, Pause, Play, Upload } from 'lucide-react';
 import { usePlayer } from '../context/PlayerContext';
 import { CoverImage } from './CoverImage';
 import { TrackRow } from './TrackRow';
@@ -40,6 +40,7 @@ export function HomeView() {
           {quickPicks.map((playlist) => {
             const isThisPlaying = currentPlaylistId === playlist.id && isPlaying;
             const isLiked = playlist.id === 'liked-songs';
+            const isUploads = Boolean(playlist.isUploads);
 
             return (
               <div
@@ -58,6 +59,10 @@ export function HomeView() {
                 {isLiked ? (
                   <div className="w-16 h-16 shrink-0 flex items-center justify-center bg-gradient-to-br from-[#6366F1] to-[#1ED760]">
                     <Heart className="w-6 h-6 text-white fill-current" />
+                  </div>
+                ) : isUploads ? (
+                  <div className="w-16 h-16 shrink-0 flex items-center justify-center bg-gradient-to-br from-[#1ED760]/30 to-[#201F22] border-r border-white/[0.06]">
+                    <Upload className="w-6 h-6 text-[#1ED760]" />
                   </div>
                 ) : (
                   <CoverImage

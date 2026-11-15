@@ -12,9 +12,15 @@ import {
   LIKED_SONGS_COVER,
   SYSTEM_PLAYLISTS,
   TRACKS,
-  getTrackById,
+  UPLOADED_TRACKS_COVER,
 } from '../data/musicData';
 import type { ActiveView, Playlist, RepeatMode, Track } from '../types/music';
+import {
+  deleteUploadedTrackFromDB,
+  loadUploadedTracksFromDB,
+  processUploadedAudioFile,
+  saveUploadedTrackToDB,
+} from '../utils/uploadedTracksStorage';
 
 const STORAGE_KEYS = {
   LIKED: 'vibeflow_liked_tracks_v1',
@@ -43,9 +49,11 @@ function writeStorage<T>(key: string, value: T): void {
 
 interface PlayerContextValue {
   tracks: Track[];
+  uploadedTracks: Track[];
   systemPlaylists: Playlist[];
   customPlaylists: Playlist[];
   likedPlaylist: Playlist;
+  uploadedPlaylist: Playlist;
   allPlaylists: Playlist[];
   likedTrackIds: string[];
   activeView: ActiveView;
@@ -62,6 +70,11 @@ interface PlayerContextValue {
   isMuted: boolean;
   isShuffle: boolean;
   repeatMode: RepeatMode;
+  playbackError: string | null;
+  clearPlaybackError: () => void;
+  isUploading: boolean;
+  isTrackPlayable: (track: Track) => boolean;
+  getTrackById: (trackId: string) => Track | undefined;
   isNowPlayingOpen: boolean;
   setIsNowPlayingOpen: React.Dispatch<React.SetStateAction<boolean>>;
   isCreateModalOpen: boolean;
@@ -87,6 +100,8 @@ interface PlayerContextValue {
   deletePlaylist: (playlistId: string) => void;
   addTrackToPlaylist: (playlistId: string, trackId: string) => void;
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => void;
+  uploadAudioFiles: (files: FileList | File[]) => Promise<void>;
+  removeUploadedTrack: (trackId: string) => Promise<void>;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -98,6 +113,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [customPlaylists, setCustomPlaylists] = useState<Playlist[]>(() =>
     readStorage<Playlist[]>(STORAGE_KEYS.CUSTOM_PLAYLISTS, [])
   );
+  const [uploadedTracks, setUploadedTracks] = useState<Track[]>([]);
+  const [unavailableTrackIds, setUnavailableTrackIds] = useState<Set<string>>(() => new Set());
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+
   const [volume, setVolumeState] = useState<number>(() =>
     readStorage<number>(STORAGE_KEYS.VOLUME, 0.78)
   );
@@ -121,16 +141,27 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const synthFallbackActiveRef = useRef<boolean>(false);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const synthGainRef = useRef<GainNode | null>(null);
-  const synthOscsRef = useRef<OscillatorNode[]>([]);
-  const synthTimerRef = useRef<number | null>(null);
   const hasLoadedInitialTrackRef = useRef<boolean>(false);
+  const uploadedObjectUrlsRef = useRef<string[]>([]);
+
+  const allTracks = useMemo(() => [...uploadedTracks, ...TRACKS], [uploadedTracks]);
+
+  const getTrackById = useCallback(
+    (trackId: string) => allTracks.find((t) => t.id === trackId),
+    [allTracks]
+  );
 
   const currentTrack = useMemo(
     () => getTrackById(currentTrackId) ?? TRACKS[0],
-    [currentTrackId]
+    [currentTrackId, getTrackById]
+  );
+
+  const isTrackPlayable = useCallback(
+    (track: Track) =>
+      Boolean(track.audioUrl) &&
+      track.isAvailable !== false &&
+      !unavailableTrackIds.has(track.id),
+    [unavailableTrackIds]
   );
 
   const likedPlaylist = useMemo<Playlist>(
@@ -147,10 +178,68 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [likedTrackIds]
   );
 
-  const allPlaylists = useMemo(
-    () => [likedPlaylist, ...SYSTEM_PLAYLISTS, ...customPlaylists],
-    [likedPlaylist, customPlaylists]
+  const uploadedPlaylist = useMemo<Playlist>(
+    () => ({
+      id: 'uploaded-tracks',
+      title: 'Uploaded MP3s',
+      description: 'Your local MP3 files ready for instant playback.',
+      coverUrl: UPLOADED_TRACKS_COVER,
+      accentColor: '#1ED760',
+      trackIds: uploadedTracks.map((t) => t.id),
+      category: 'Local Audio',
+      isSystem: true,
+      isUploads: true,
+    }),
+    [uploadedTracks]
   );
+
+  const allPlaylists = useMemo(
+    () => [likedPlaylist, uploadedPlaylist, ...SYSTEM_PLAYLISTS, ...customPlaylists],
+    [likedPlaylist, uploadedPlaylist, customPlaylists]
+  );
+
+  const clearPlaybackError = useCallback(() => setPlaybackError(null), []);
+
+  const markTrackUnavailable = useCallback((track: Track, reason?: string) => {
+    setUnavailableTrackIds((prev) => {
+      const next = new Set(prev);
+      next.add(track.id);
+      return next;
+    });
+    setIsPlaying(false);
+    setIsBuffering(false);
+    setPlaybackError(
+      reason ?? `Audio unavailable for "${track.title}" — source file missing or unsupported.`
+    );
+  }, []);
+
+  // Load persisted uploaded MP3s from IndexedDB on mount
+  useEffect(() => {
+    let cancelled = false;
+    loadUploadedTracksFromDB(UPLOADED_TRACKS_COVER).then((loaded) => {
+      if (cancelled) {
+        loaded.forEach((t) => {
+          if (t.audioUrl?.startsWith('blob:')) URL.revokeObjectURL(t.audioUrl);
+        });
+        return;
+      }
+      uploadedObjectUrlsRef.current = loaded
+        .map((t) => t.audioUrl)
+        .filter((u): u is string => Boolean(u && u.startsWith('blob:')));
+      setUploadedTracks(loaded);
+    });
+
+    return () => {
+      cancelled = true;
+      uploadedObjectUrlsRef.current.forEach((url) => {
+        try {
+          URL.revokeObjectURL(url);
+        } catch {
+          // ignore
+        }
+      });
+    };
+  }, []);
 
   // Refs for latest state inside audio event listeners
   const stateRef = useRef({
@@ -163,6 +252,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     isMuted,
     currentTime,
     duration,
+    getTrackById,
+    isTrackPlayable,
+    markTrackUnavailable,
   });
 
   stateRef.current = {
@@ -175,6 +267,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     isMuted,
     currentTime,
     duration,
+    getTrackById,
+    isTrackPlayable,
+    markTrackUnavailable,
   };
 
   // Persist user preferences
@@ -194,189 +289,134 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     writeStorage(STORAGE_KEYS.MUTED, isMuted);
   }, [isMuted]);
 
-  const stopSynthFallback = useCallback(() => {
-    if (synthTimerRef.current !== null) {
-      window.clearInterval(synthTimerRef.current);
-      synthTimerRef.current = null;
-    }
-    synthOscsRef.current.forEach((osc) => {
-      try {
-        osc.stop();
-        osc.disconnect();
-      } catch {
-        // ignore already stopped
-      }
-    });
-    synthOscsRef.current = [];
-    if (synthGainRef.current) {
-      try {
-        synthGainRef.current.disconnect();
-      } catch {
-        // ignore
-      }
-      synthGainRef.current = null;
-    }
-  }, []);
-
-  const startSynthFallback = useCallback(
-    (track: Track) => {
-      stopSynthFallback();
-      synthFallbackActiveRef.current = true;
-      setIsBuffering(false);
-
-      try {
-        const AudioContextClass =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        if (!audioCtxRef.current && AudioContextClass) {
-          audioCtxRef.current = new AudioContextClass();
-        }
-        const ctx = audioCtxRef.current;
-        if (ctx) {
-          if (ctx.state === 'suspended') {
-            ctx.resume().catch(() => {});
-          }
-          const masterGain = ctx.createGain();
-          const filter = ctx.createBiquadFilter();
-          filter.type = 'lowpass';
-          filter.frequency.value = 620;
-
-          const effectiveVol = stateRef.current.isMuted ? 0 : stateRef.current.volume;
-          masterGain.gain.setValueAtTime(effectiveVol * 0.08, ctx.currentTime);
-          filter.connect(masterGain);
-          masterGain.connect(ctx.destination);
-          synthGainRef.current = masterGain;
-
-          // Warm ambient triad pad (root, fifth, ninth)
-          const ratios = [1, 1.498, 2.245];
-          const oscs = ratios.map((ratio, idx) => {
-            const osc = ctx.createOscillator();
-            osc.type = idx === 0 ? 'sine' : 'triangle';
-            osc.frequency.value = track.synthRootHz * ratio;
-            osc.detune.value = (idx - 1) * 4;
-            osc.connect(filter);
-            osc.start();
-            return osc;
-          });
-          synthOscsRef.current = oscs;
-        }
-      } catch {
-        // Silent timer fallback if AudioContext is unavailable
-      }
-
-      synthTimerRef.current = window.setInterval(() => {
-        setCurrentTime((prev) => {
-          const next = prev + 0.5;
-          if (next >= track.durationSec) {
-            return track.durationSec;
-          }
-          return next;
-        });
-      }, 500);
-    },
-    [stopSynthFallback]
-  );
-
-  // Compute next track index/id
   const getNextTrackId = useCallback((): string | null => {
-    const { queueIds: q, currentTrack: curr, isShuffle: shuffle, repeatMode: repeat } =
-      stateRef.current;
-    if (q.length === 0) return curr.id;
+    const {
+      queueIds: q,
+      currentTrack: curr,
+      isShuffle: shuffle,
+      repeatMode: repeat,
+      getTrackById: findTrack,
+      isTrackPlayable: playable,
+    } = stateRef.current;
 
-    if (shuffle && q.length > 1) {
-      const candidates = q.filter((id) => id !== curr.id);
-      return candidates[Math.floor(Math.random() * candidates.length)] ?? q[0];
+    const playableQueue = q.filter((id) => {
+      const t = findTrack(id);
+      return t ? playable(t) : false;
+    });
+
+    if (playableQueue.length === 0) return null;
+
+    if (shuffle && playableQueue.length > 1) {
+      const candidates = playableQueue.filter((id) => id !== curr.id);
+      return candidates[Math.floor(Math.random() * candidates.length)] ?? playableQueue[0];
     }
 
-    const idx = q.indexOf(curr.id);
-    if (idx === -1) return q[0];
-    if (idx + 1 < q.length) {
-      return q[idx + 1];
+    const idx = playableQueue.indexOf(curr.id);
+    if (idx === -1) return playableQueue[0];
+    if (idx + 1 < playableQueue.length) {
+      return playableQueue[idx + 1];
     }
     if (repeat === 'all') {
-      return q[0];
+      return playableQueue[0];
     }
     return null;
   }, []);
 
-  const loadAndPlay = useCallback(
-    (track: Track, autoPlay: boolean) => {
-      const audio = audioRef.current;
-      stopSynthFallback();
-      synthFallbackActiveRef.current = false;
-      setCurrentTime(0);
-      setDuration(track.durationSec);
+  const loadAndPlay = useCallback((track: Track, autoPlay: boolean) => {
+    const audio = audioRef.current;
+    setCurrentTime(0);
+    setDuration(track.durationSec);
 
-      if (!audio) return;
+    if (!track.audioUrl || track.isAvailable === false) {
+      stateRef.current.markTrackUnavailable(
+        track,
+        `Audio unavailable for "${track.title}" — no audio file attached.`
+      );
+      return;
+    }
 
-      audio.src = track.audioUrl;
-      audio.volume = stateRef.current.isMuted ? 0 : stateRef.current.volume;
+    if (!audio) return;
 
-      if (autoPlay) {
-        setIsBuffering(true);
-        setIsPlaying(true);
-        const playPromise = audio.play();
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => {
-              setIsBuffering(false);
-            })
-            .catch((err: Error) => {
-              if (err?.name === 'AbortError') return;
-              // Network/CORS or sandbox blocked -> seamless ambient synth fallback
-              startSynthFallback(track);
-            });
-        }
-      } else {
-        setIsPlaying(false);
-        setIsBuffering(false);
+    setPlaybackError(null);
+    audio.src = track.audioUrl;
+    audio.volume = stateRef.current.isMuted ? 0 : stateRef.current.volume;
+
+    if (autoPlay) {
+      setIsBuffering(true);
+      setIsPlaying(true);
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise
+          .then(() => {
+            setIsBuffering(false);
+          })
+          .catch((err: Error) => {
+            if (err?.name === 'AbortError') return;
+            stateRef.current.markTrackUnavailable(
+              track,
+              `Unable to play "${track.title}" — audio file could not be loaded.`
+            );
+          });
       }
-    },
-    [startSynthFallback, stopSynthFallback]
-  );
+    } else {
+      setIsPlaying(false);
+      setIsBuffering(false);
+    }
+  }, []);
 
-  // Initialize single <audio> instance
+  // Initialize single persistent <audio> instance
   useEffect(() => {
     const audio = new Audio();
     audio.preload = 'metadata';
-    audio.crossOrigin = 'anonymous';
     audioRef.current = audio;
 
     const handleTimeUpdate = () => {
-      if (!synthFallbackActiveRef.current) {
-        setCurrentTime(audio.currentTime);
-      }
+      setCurrentTime(audio.currentTime);
     };
 
-    const handleLoadedMetadata = () => {
+    const handleDurationChange = () => {
       if (Number.isFinite(audio.duration) && audio.duration > 0) {
         setDuration(audio.duration);
       }
-      setIsBuffering(false);
     };
 
     const handleCanPlay = () => {
       setIsBuffering(false);
     };
 
+    const handlePlaying = () => {
+      setIsBuffering(false);
+      setIsPlaying(true);
+    };
+
     const handleError = () => {
+      if (!audio.getAttribute('src')) return;
+      const curr = stateRef.current.currentTrack;
       if (stateRef.current.isPlaying) {
-        startSynthFallback(stateRef.current.currentTrack);
+        stateRef.current.markTrackUnavailable(
+          curr,
+          `Playback failed for "${curr.title}" — audio file is missing or corrupted.`
+        );
       } else {
         setIsBuffering(false);
       }
     };
 
     const handleEnded = () => {
-      const { repeatMode: repeat, currentTrack: curr } = stateRef.current;
+      const { repeatMode: repeat, currentTrack: curr, getTrackById: findTrack } =
+        stateRef.current;
       if (repeat === 'one') {
         audio.currentTime = 0;
-        audio.play().catch(() => startSynthFallback(curr));
+        audio.play().catch((err: Error) => {
+          if (err?.name !== 'AbortError') {
+            stateRef.current.markTrackUnavailable(curr);
+          }
+        });
         return;
       }
       const nextId = getNextTrackId();
       if (nextId) {
-        const nextTrk = getTrackById(nextId);
+        const nextTrk = findTrack(nextId);
         if (nextTrk) {
           setCurrentTrackId(nextTrk.id);
           loadAndPlay(nextTrk, true);
@@ -388,13 +428,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('loadedmetadata', handleDurationChange);
+    audio.addEventListener('durationchange', handleDurationChange);
     audio.addEventListener('canplay', handleCanPlay);
+    audio.addEventListener('playing', handlePlaying);
     audio.addEventListener('error', handleError);
     audio.addEventListener('ended', handleEnded);
 
-    // Preload initial track silently without auto-playing
-    if (!hasLoadedInitialTrackRef.current) {
+    if (!hasLoadedInitialTrackRef.current && TRACKS[0].audioUrl) {
       hasLoadedInitialTrackRef.current = true;
       audio.src = TRACKS[0].audioUrl;
       audio.volume = stateRef.current.isMuted ? 0 : stateRef.current.volume;
@@ -403,45 +444,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => {
       audio.pause();
       audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('loadedmetadata', handleDurationChange);
+      audio.removeEventListener('durationchange', handleDurationChange);
       audio.removeEventListener('canplay', handleCanPlay);
+      audio.removeEventListener('playing', handlePlaying);
       audio.removeEventListener('error', handleError);
       audio.removeEventListener('ended', handleEnded);
-      stopSynthFallback();
     };
-  }, [getNextTrackId, loadAndPlay, startSynthFallback, stopSynthFallback]);
+  }, [getNextTrackId, loadAndPlay]);
 
-  // Handle synth fallback end-of-track transitions
-  useEffect(() => {
-    if (!synthFallbackActiveRef.current || !isPlaying) return;
-    if (currentTime >= duration) {
-      if (repeatMode === 'one') {
-        setCurrentTime(0);
-        return;
-      }
-      const nextId = getNextTrackId();
-      if (nextId) {
-        const nextTrk = getTrackById(nextId);
-        if (nextTrk) {
-          setCurrentTrackId(nextTrk.id);
-          loadAndPlay(nextTrk, true);
-          return;
-        }
-      }
-      stopSynthFallback();
-      setIsPlaying(false);
-      setCurrentTime(0);
-    }
-  }, [currentTime, duration, getNextTrackId, isPlaying, loadAndPlay, repeatMode, stopSynthFallback]);
-
-  // Sync volume & mute to audio + synth
+  // Sync volume & mute to <audio>
   useEffect(() => {
     const effective = isMuted ? 0 : volume;
     if (audioRef.current) {
       audioRef.current.volume = effective;
-    }
-    if (synthGainRef.current && audioCtxRef.current) {
-      synthGainRef.current.gain.setValueAtTime(effective * 0.08, audioCtxRef.current.currentTime);
     }
   }, [volume, isMuted]);
 
@@ -455,6 +471,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const target = getTrackById(trackId);
       if (!target) return;
 
+      if (!isTrackPlayable(target)) {
+        setPlaybackError(
+          `Audio unavailable for "${target.title}" — no playable audio source found.`
+        );
+        return;
+      }
+
       if (contextQueueIds && contextQueueIds.length > 0) {
         setQueueIds(contextQueueIds);
       }
@@ -465,15 +488,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setCurrentPlaylistId(contextPlaylistId);
       }
 
-      if (trackId === currentTrackId) {
-        // Resume if paused, or restart if ended
+      if (trackId === currentTrackId && audioRef.current?.getAttribute('src')) {
+        setPlaybackError(null);
         if (!isPlaying) {
+          setIsBuffering(true);
           setIsPlaying(true);
-          if (synthFallbackActiveRef.current) {
-            startSynthFallback(target);
-          } else {
-            audioRef.current?.play().catch(() => startSynthFallback(target));
-          }
+          audioRef.current
+            .play()
+            .then(() => setIsBuffering(false))
+            .catch((err: Error) => {
+              if (err?.name !== 'AbortError') {
+                markTrackUnavailable(target);
+              }
+            });
         }
         return;
       }
@@ -481,7 +508,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setCurrentTrackId(target.id);
       loadAndPlay(target, true);
     },
-    [currentTrackId, isPlaying, loadAndPlay, startSynthFallback]
+    [
+      currentTrackId,
+      getTrackById,
+      isPlaying,
+      isTrackPlayable,
+      loadAndPlay,
+      markTrackUnavailable,
+    ]
   );
 
   const playPlaylist = useCallback(
@@ -493,26 +527,42 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setIsShuffle(enableShuffle);
       }
 
+      const playableIds = pl.trackIds.filter((id) => {
+        const t = getTrackById(id);
+        return t ? isTrackPlayable(t) : false;
+      });
+
+      if (playableIds.length === 0) {
+        setPlaybackError(`No playable audio tracks found in "${pl.title}".`);
+        return;
+      }
+
       const firstId =
-        startTrackId && pl.trackIds.includes(startTrackId)
+        startTrackId && playableIds.includes(startTrackId)
           ? startTrackId
           : enableShuffle
-            ? pl.trackIds[Math.floor(Math.random() * pl.trackIds.length)]
-            : pl.trackIds[0];
+            ? playableIds[Math.floor(Math.random() * playableIds.length)]
+            : playableIds[0];
 
-      // If clicking play on already active playlist without specifying track, toggle play/pause
       if (!startTrackId && currentPlaylistId === playlistId && enableShuffle === undefined) {
         if (isPlaying) {
           audioRef.current?.pause();
-          stopSynthFallback();
           setIsPlaying(false);
         } else {
-          setIsPlaying(true);
-          if (synthFallbackActiveRef.current) {
-            startSynthFallback(currentTrack);
-          } else {
-            audioRef.current?.play().catch(() => startSynthFallback(currentTrack));
+          if (!isTrackPlayable(currentTrack)) {
+            playTrack(firstId, pl.trackIds, pl.title, pl.id);
+            return;
           }
+          setIsBuffering(true);
+          setIsPlaying(true);
+          audioRef.current
+            ?.play()
+            .then(() => setIsBuffering(false))
+            .catch((err: Error) => {
+              if (err?.name !== 'AbortError') {
+                markTrackUnavailable(currentTrack);
+              }
+            });
         }
         return;
       }
@@ -523,49 +573,74 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       allPlaylists,
       currentPlaylistId,
       currentTrack,
+      getTrackById,
       isPlaying,
+      isTrackPlayable,
+      markTrackUnavailable,
       playTrack,
-      startSynthFallback,
-      stopSynthFallback,
     ]
   );
 
   const togglePlayPause = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
     if (isPlaying) {
-      audioRef.current?.pause();
-      stopSynthFallback();
+      audio.pause();
       setIsPlaying(false);
-    } else {
-      setIsPlaying(true);
-      if (synthFallbackActiveRef.current) {
-        startSynthFallback(currentTrack);
-      } else {
-        setIsBuffering(true);
-        audioRef.current
-          ?.play()
-          .then(() => setIsBuffering(false))
-          .catch((err: Error) => {
-            if (err?.name === 'AbortError') return;
-            startSynthFallback(currentTrack);
-          });
-      }
+      setIsBuffering(false);
+      return;
     }
-  }, [currentTrack, isPlaying, startSynthFallback, stopSynthFallback]);
+
+    if (!isTrackPlayable(currentTrack)) {
+      setPlaybackError(
+        `Audio unavailable for "${currentTrack.title}" — please select another track or upload an MP3.`
+      );
+      return;
+    }
+
+    setPlaybackError(null);
+    if (!audio.getAttribute('src') && currentTrack.audioUrl) {
+      audio.src = currentTrack.audioUrl;
+    }
+
+    setIsBuffering(true);
+    setIsPlaying(true);
+    audio
+      .play()
+      .then(() => setIsBuffering(false))
+      .catch((err: Error) => {
+        if (err?.name !== 'AbortError') {
+          markTrackUnavailable(currentTrack);
+        }
+      });
+  }, [currentTrack, isPlaying, isTrackPlayable, markTrackUnavailable]);
 
   const nextTrack = useCallback(() => {
-    const { queueIds: q, currentTrack: curr, isShuffle: shuffle } = stateRef.current;
-    if (q.length === 0) return;
+    const {
+      queueIds: q,
+      currentTrack: curr,
+      isShuffle: shuffle,
+      getTrackById: findTrack,
+      isTrackPlayable: playable,
+    } = stateRef.current;
+
+    const playableQueue = q.filter((id) => {
+      const t = findTrack(id);
+      return t ? playable(t) : false;
+    });
+    if (playableQueue.length === 0) return;
 
     let nextId: string;
-    if (shuffle && q.length > 1) {
-      const candidates = q.filter((id) => id !== curr.id);
-      nextId = candidates[Math.floor(Math.random() * candidates.length)] ?? q[0];
+    if (shuffle && playableQueue.length > 1) {
+      const candidates = playableQueue.filter((id) => id !== curr.id);
+      nextId = candidates[Math.floor(Math.random() * candidates.length)] ?? playableQueue[0];
     } else {
-      const idx = q.indexOf(curr.id);
-      nextId = idx === -1 ? q[0] : q[(idx + 1) % q.length];
+      const idx = playableQueue.indexOf(curr.id);
+      nextId = idx === -1 ? playableQueue[0] : playableQueue[(idx + 1) % playableQueue.length];
     }
 
-    const nextTrk = getTrackById(nextId);
+    const nextTrk = findTrack(nextId);
     if (nextTrk) {
       setCurrentTrackId(nextTrk.id);
       loadAndPlay(nextTrk, true);
@@ -573,19 +648,29 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [loadAndPlay]);
 
   const prevTrack = useCallback(() => {
-    const { queueIds: q, currentTrack: curr, currentTime: elapsed } = stateRef.current;
-    if (elapsed > 3) {
-      if (audioRef.current && !synthFallbackActiveRef.current) {
-        audioRef.current.currentTime = 0;
-      }
+    const {
+      queueIds: q,
+      currentTrack: curr,
+      currentTime: elapsed,
+      getTrackById: findTrack,
+      isTrackPlayable: playable,
+    } = stateRef.current;
+
+    if (elapsed > 3 && audioRef.current) {
+      audioRef.current.currentTime = 0;
       setCurrentTime(0);
       return;
     }
 
-    if (q.length === 0) return;
-    const idx = q.indexOf(curr.id);
-    const prevId = idx <= 0 ? q[q.length - 1] : q[idx - 1];
-    const prevTrk = getTrackById(prevId);
+    const playableQueue = q.filter((id) => {
+      const t = findTrack(id);
+      return t ? playable(t) : false;
+    });
+    if (playableQueue.length === 0) return;
+
+    const idx = playableQueue.indexOf(curr.id);
+    const prevId = idx <= 0 ? playableQueue[playableQueue.length - 1] : playableQueue[idx - 1];
+    const prevTrk = findTrack(prevId);
     if (prevTrk) {
       setCurrentTrackId(prevTrk.id);
       loadAndPlay(prevTrk, true);
@@ -594,7 +679,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const seekTo = useCallback((seconds: number) => {
     const clamped = Math.max(0, Math.min(seconds, stateRef.current.duration));
-    if (audioRef.current && !synthFallbackActiveRef.current) {
+    if (audioRef.current) {
       try {
         audioRef.current.currentTime = clamped;
       } catch {
@@ -656,15 +741,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return newPl;
   }, []);
 
-  const deletePlaylist = useCallback(
-    (playlistId: string) => {
-      setCustomPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
-      setActiveView((prev) =>
-        prev.type === 'playlist' && prev.playlistId === playlistId ? { type: 'home' } : prev
-      );
-    },
-    []
-  );
+  const deletePlaylist = useCallback((playlistId: string) => {
+    setCustomPlaylists((prev) => prev.filter((p) => p.id !== playlistId));
+    setActiveView((prev) =>
+      prev.type === 'playlist' && prev.playlistId === playlistId ? { type: 'home' } : prev
+    );
+  }, []);
 
   const addTrackToPlaylist = useCallback((playlistId: string, trackId: string) => {
     setCustomPlaylists((prev) =>
@@ -684,6 +766,96 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       })
     );
   }, []);
+
+  const uploadAudioFiles = useCallback(
+    async (files: FileList | File[]) => {
+      const fileList = Array.from(files);
+      if (fileList.length === 0) return;
+
+      setIsUploading(true);
+      setPlaybackError(null);
+      const newlyAdded: Track[] = [];
+      const errors: string[] = [];
+
+      for (const file of fileList) {
+        try {
+          const { track, record } = await processUploadedAudioFile(
+            file,
+            UPLOADED_TRACKS_COVER
+          );
+          if (track.audioUrl?.startsWith('blob:')) {
+            uploadedObjectUrlsRef.current.push(track.audioUrl);
+          }
+          await saveUploadedTrackToDB(record);
+          newlyAdded.push(track);
+        } catch (err) {
+          errors.push(
+            err instanceof Error ? err.message : `Failed to process "${file.name}".`
+          );
+        }
+      }
+
+      if (newlyAdded.length > 0) {
+        setUploadedTracks((prev) => {
+          const merged = [...newlyAdded, ...prev];
+          const firstNew = newlyAdded[0];
+          const updatedQueue = merged.map((t) => t.id);
+          setQueueIds(updatedQueue);
+          setCurrentPlaylistId('uploaded-tracks');
+          setCurrentContextLabel('Uploaded MP3s');
+          setCurrentTrackId(firstNew.id);
+          loadAndPlay(firstNew, true);
+          return merged;
+        });
+        setActiveView({ type: 'playlist', playlistId: 'uploaded-tracks' });
+      }
+
+      if (errors.length > 0) {
+        setPlaybackError(errors[0]);
+      }
+
+      setIsUploading(false);
+    },
+    [loadAndPlay]
+  );
+
+  const removeUploadedTrack = useCallback(
+    async (trackId: string) => {
+      const target = uploadedTracks.find((t) => t.id === trackId);
+      if (target?.audioUrl?.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(target.audioUrl);
+        } catch {
+          // ignore
+        }
+      }
+      await deleteUploadedTrackFromDB(trackId);
+
+      setUploadedTracks((prev) => prev.filter((t) => t.id !== trackId));
+      setLikedTrackIds((prev) => prev.filter((id) => id !== trackId));
+      setCustomPlaylists((prev) =>
+        prev.map((pl) => ({
+          ...pl,
+          trackIds: pl.trackIds.filter((id) => id !== trackId),
+        }))
+      );
+
+      if (currentTrackId === trackId) {
+        audioRef.current?.pause();
+        setIsPlaying(false);
+        setCurrentTime(0);
+        setCurrentTrackId(TRACKS[0].id);
+        setQueueIds(SYSTEM_PLAYLISTS[0].trackIds);
+        setCurrentPlaylistId(SYSTEM_PLAYLISTS[0].id);
+        setCurrentContextLabel(SYSTEM_PLAYLISTS[0].title);
+        if (audioRef.current && TRACKS[0].audioUrl) {
+          audioRef.current.src = TRACKS[0].audioUrl;
+          setDuration(TRACKS[0].durationSec);
+        }
+      }
+    },
+    [currentTrackId, uploadedTracks]
+  );
 
   // Global Spacebar shortcut for Play/Pause
   useEffect(() => {
@@ -709,10 +881,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [togglePlayPause]);
 
   const value: PlayerContextValue = {
-    tracks: TRACKS,
+    tracks: allTracks,
+    uploadedTracks,
     systemPlaylists: SYSTEM_PLAYLISTS,
     customPlaylists,
     likedPlaylist,
+    uploadedPlaylist,
     allPlaylists,
     likedTrackIds,
     activeView,
@@ -729,6 +903,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     isMuted,
     isShuffle,
     repeatMode,
+    playbackError,
+    clearPlaybackError,
+    isUploading,
+    isTrackPlayable,
+    getTrackById,
     isNowPlayingOpen,
     setIsNowPlayingOpen,
     isCreateModalOpen,
@@ -749,6 +928,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     deletePlaylist,
     addTrackToPlaylist,
     removeTrackFromPlaylist,
+    uploadAudioFiles,
+    removeUploadedTrack,
   };
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;

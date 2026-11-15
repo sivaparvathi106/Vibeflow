@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Heart, ListPlus, Pause, Play, Plus, Trash2 } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  Heart,
+  ListPlus,
+  Pause,
+  Play,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 import { usePlayer } from '../context/PlayerContext';
 import type { Track } from '../types/music';
 import { formatTime } from '../utils/formatTime';
@@ -14,6 +23,7 @@ interface TrackRowProps {
   contextPlaylistId?: string | null;
   showAlbum?: boolean;
   removablePlaylistId?: string;
+  isUploadsPlaylist?: boolean;
 }
 
 export function TrackRow({
@@ -24,10 +34,12 @@ export function TrackRow({
   contextPlaylistId = null,
   showAlbum = true,
   removablePlaylistId,
+  isUploadsPlaylist = false,
 }: TrackRowProps) {
   const {
     currentTrack,
     isPlaying,
+    isTrackPlayable,
     playTrack,
     togglePlayPause,
     toggleLike,
@@ -35,13 +47,15 @@ export function TrackRow({
     customPlaylists,
     addTrackToPlaylist,
     removeTrackFromPlaylist,
+    removeUploadedTrack,
     setIsCreateModalOpen,
   } = usePlayer();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const isActive = currentTrack.id === track.id;
+  const playable = isTrackPlayable(track);
+  const isActive = currentTrack.id === track.id && playable;
   const liked = isTrackLiked(track.id);
 
   useEffect(() => {
@@ -56,6 +70,10 @@ export function TrackRow({
   }, [menuOpen]);
 
   const handleRowAction = () => {
+    if (!playable) {
+      playTrack(track.id, contextQueueIds, contextLabel, contextPlaylistId);
+      return;
+    }
     if (isActive) {
       togglePlayPause();
     } else {
@@ -74,26 +92,40 @@ export function TrackRow({
           handleRowAction();
         }
       }}
-      className={`group grid items-center gap-4 px-3 py-2.5 rounded-lg transition-colors duration-150 cursor-pointer select-none focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
+      className={`group grid items-center gap-4 px-3 py-2.5 rounded-lg transition-colors duration-150 select-none focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
         showAlbum
           ? 'grid-cols-[28px_minmax(0,2fr)_minmax(0,1.2fr)_auto]'
           : 'grid-cols-[28px_minmax(0,1fr)_auto]'
       } ${
-        isActive
-          ? 'bg-white/[0.08]'
-          : 'hover:bg-white/[0.05]'
+        !playable
+          ? 'opacity-55 cursor-not-allowed hover:bg-white/[0.03]'
+          : isActive
+            ? 'bg-white/[0.08] cursor-pointer'
+            : 'hover:bg-white/[0.05] cursor-pointer'
       }`}
-      aria-label={`${isActive && isPlaying ? 'Pause' : 'Play'} ${track.title} by ${track.artist}`}
+      aria-label={
+        !playable
+          ? `${track.title} by ${track.artist} — audio unavailable`
+          : `${isActive && isPlaying ? 'Pause' : 'Play'} ${track.title} by ${track.artist}`
+      }
     >
       {/* Index / Equalizer / Play-Pause Hover Control */}
       <div className="flex items-center justify-center w-7 h-7">
-        {isActive ? (
+        {!playable ? (
+          <span className="text-[#ffb4ab]" title="Audio unavailable">
+            <AlertCircle className="w-4 h-4" />
+          </span>
+        ) : isActive ? (
           <>
             <span className="group-hover:hidden flex items-center justify-center">
               <EqualizerIcon isPlaying={isPlaying} />
             </span>
             <span className="hidden group-hover:flex items-center justify-center text-white">
-              {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+              {isPlaying ? (
+                <Pause className="w-4 h-4 fill-current" />
+              ) : (
+                <Play className="w-4 h-4 fill-current" />
+              )}
             </span>
           </>
         ) : (
@@ -119,18 +151,25 @@ export function TrackRow({
         <div className="min-w-0">
           <div
             className={`text-sm font-medium truncate transition-colors ${
-              isActive ? 'text-[#1ED760]' : 'text-white group-hover:text-white'
+              !playable
+                ? 'text-[#A1A1AA]'
+                : isActive
+                  ? 'text-[#1ED760]'
+                  : 'text-white group-hover:text-white'
             }`}
           >
             {track.title}
           </div>
           <div className="text-xs text-[#A1A1AA] truncate">
             {track.artist}
+            {!playable && (
+              <span className="text-[#ffb4ab]"> · Unavailable</span>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Album & Genre */}
+      {/* Album */}
       {showAlbum && (
         <div className="hidden md:block min-w-0 text-sm text-[#A1A1AA] truncate">
           {track.album}
@@ -145,7 +184,11 @@ export function TrackRow({
         <button
           type="button"
           onClick={() => toggleLike(track.id)}
-          aria-label={liked ? `Remove ${track.title} from Liked Songs` : `Save ${track.title} to Liked Songs`}
+          aria-label={
+            liked
+              ? `Remove ${track.title} from Liked Songs`
+              : `Save ${track.title} to Liked Songs`
+          }
           className={`p-1.5 rounded-md transition-all focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
             liked
               ? 'text-[#1ED760] opacity-100'
@@ -155,9 +198,19 @@ export function TrackRow({
           <Heart className={`w-4 h-4 ${liked ? 'fill-current' : ''}`} />
         </button>
 
-        {/* Add to custom playlist or remove from current custom playlist */}
+        {/* Add to custom playlist or remove from playlist / uploaded tracks */}
         <div className="relative" ref={menuRef}>
-          {removablePlaylistId ? (
+          {isUploadsPlaylist && track.isUploaded ? (
+            <button
+              type="button"
+              onClick={() => void removeUploadedTrack(track.id)}
+              aria-label={`Delete uploaded track ${track.title}`}
+              className="p-1.5 rounded-md text-[#A1A1AA] opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-[#ffb4ab] transition-all focus-visible:outline-2 focus-visible:outline-[#1ED760]"
+              title="Delete uploaded MP3"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          ) : removablePlaylistId ? (
             <button
               type="button"
               onClick={() => removeTrackFromPlaylist(removablePlaylistId, track.id)}
@@ -235,7 +288,7 @@ export function TrackRow({
         </div>
 
         <span className="w-11 text-right text-xs text-[#A1A1AA] tabular-nums">
-          {formatTime(track.durationSec)}
+          {track.durationSec > 0 ? formatTime(track.durationSec) : '--:--'}
         </span>
       </div>
     </div>

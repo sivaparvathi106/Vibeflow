@@ -1,6 +1,5 @@
-import { Heart, Play, X } from 'lucide-react';
+import { AlertCircle, Heart, Play, X } from 'lucide-react';
 import { usePlayer } from '../context/PlayerContext';
-import { getTrackById } from '../data/musicData';
 import type { Track } from '../types/music';
 import { formatTime } from '../utils/formatTime';
 import { CoverImage } from './CoverImage';
@@ -14,6 +13,8 @@ export function NowPlayingPanel() {
     isNowPlayingOpen,
     setIsNowPlayingOpen,
     isTrackLiked,
+    isTrackPlayable,
+    getTrackById,
     toggleLike,
     playTrack,
     setActiveView,
@@ -22,6 +23,7 @@ export function NowPlayingPanel() {
   if (!isNowPlayingOpen) return null;
 
   const liked = isTrackLiked(currentTrack.id);
+  const currentPlayable = isTrackPlayable(currentTrack);
 
   // Build upcoming queue after current track
   const currentIdx = queueIds.indexOf(currentTrack.id);
@@ -88,6 +90,9 @@ export function NowPlayingPanel() {
             </h2>
             <p className="text-sm text-[#A1A1AA] truncate">
               {currentTrack.artist}
+              {!currentPlayable && (
+                <span className="text-[#ffb4ab]"> · Audio unavailable</span>
+              )}
             </p>
           </div>
 
@@ -108,10 +113,18 @@ export function NowPlayingPanel() {
         {/* Clean Unboxed Track Telemetry */}
         <div className="flex items-center gap-2 text-xs text-[#A1A1AA] tabular-nums pt-1 border-t border-white/[0.06]">
           <span>{currentTrack.genre}</span>
-          <span aria-hidden="true">·</span>
-          <span>{currentTrack.bpm} BPM</span>
-          <span aria-hidden="true">·</span>
-          <span>{currentTrack.musicalKey}</span>
+          {currentTrack.bpm && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{currentTrack.bpm} BPM</span>
+            </>
+          )}
+          {currentTrack.musicalKey && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{currentTrack.musicalKey}</span>
+            </>
+          )}
         </div>
       </div>
 
@@ -132,41 +145,53 @@ export function NowPlayingPanel() {
           </p>
         ) : (
           <div className="space-y-1.5">
-            {upcomingTracks.map((trk) => (
-              <button
-                key={trk.id}
-                type="button"
-                onClick={() =>
-                  playTrack(trk.id, queueIds, currentContextLabel, currentPlaylistId)
-                }
-                className="group w-full flex items-center gap-3 p-2 rounded-lg hover:bg-white/[0.06] transition-colors text-left"
-              >
-                <div className="relative w-10 h-10 rounded-md overflow-hidden shrink-0">
-                  <CoverImage
-                    src={trk.coverUrl}
-                    alt={trk.title}
-                    accentColor={trk.accentColor}
-                    className="w-full h-full"
-                  />
-                  <span className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
-                    <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+            {upcomingTracks.map((trk) => {
+              const playable = isTrackPlayable(trk);
+              return (
+                <button
+                  key={trk.id}
+                  type="button"
+                  onClick={() =>
+                    playTrack(trk.id, queueIds, currentContextLabel, currentPlaylistId)
+                  }
+                  className={`group w-full flex items-center gap-3 p-2 rounded-lg transition-colors text-left ${
+                    playable ? 'hover:bg-white/[0.06]' : 'opacity-55 hover:bg-white/[0.03]'
+                  }`}
+                >
+                  <div className="relative w-10 h-10 rounded-md overflow-hidden shrink-0">
+                    <CoverImage
+                      src={trk.coverUrl}
+                      alt={trk.title}
+                      accentColor={trk.accentColor}
+                      className="w-full h-full"
+                    />
+                    <span className="absolute inset-0 bg-black/55 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                      {playable ? (
+                        <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                      ) : (
+                        <AlertCircle className="w-3.5 h-3.5 text-[#ffb4ab]" />
+                      )}
+                    </span>
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium text-white truncate">
+                      {trk.title}
+                    </div>
+                    <div className="text-[11px] text-[#A1A1AA] truncate">
+                      {trk.artist}
+                      {!playable && (
+                        <span className="text-[#ffb4ab]"> · Unavailable</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <span className="text-[11px] text-[#A1A1AA] tabular-nums shrink-0">
+                    {trk.durationSec > 0 ? formatTime(trk.durationSec) : '--:--'}
                   </span>
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-medium text-white truncate">
-                    {trk.title}
-                  </div>
-                  <div className="text-[11px] text-[#A1A1AA] truncate">
-                    {trk.artist}
-                  </div>
-                </div>
-
-                <span className="text-[11px] text-[#A1A1AA] tabular-nums shrink-0">
-                  {formatTime(trk.durationSec)}
-                </span>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

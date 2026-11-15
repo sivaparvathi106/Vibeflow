@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  AlertCircle,
   Heart,
   ListMusic,
   Loader2,
@@ -13,6 +14,7 @@ import {
   Volume1,
   Volume2,
   VolumeX,
+  X,
 } from 'lucide-react';
 import { usePlayer } from '../context/PlayerContext';
 import { formatTime } from '../utils/formatTime';
@@ -30,6 +32,9 @@ export function PlayerBar() {
     isMuted,
     isShuffle,
     repeatMode,
+    playbackError,
+    clearPlaybackError,
+    isTrackPlayable,
     isNowPlayingOpen,
     setIsNowPlayingOpen,
     togglePlayPause,
@@ -52,6 +57,7 @@ export function PlayerBar() {
   const [isDraggingVolume, setIsDraggingVolume] = useState(false);
 
   const liked = isTrackLiked(currentTrack.id);
+  const playable = isTrackPlayable(currentTrack);
   const displayedTime = dragProgressTime !== null ? dragProgressTime : currentTime;
   const progressPercent = duration > 0 ? Math.min(100, Math.max(0, (displayedTime / duration) * 100)) : 0;
   const effectiveVolume = isMuted ? 0 : volume;
@@ -106,6 +112,7 @@ export function PlayerBar() {
   }, [isDraggingVolume, setVolume]);
 
   const handleProgressPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!playable) return;
     e.preventDefault();
     const ratio = calcRatioFromClientX(progressBarRef.current, e.clientX);
     setDragProgressTime(ratio * duration);
@@ -121,6 +128,7 @@ export function PlayerBar() {
 
   const handleProgressKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!playable) return;
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         seekTo(currentTime + 5);
@@ -129,236 +137,268 @@ export function PlayerBar() {
         seekTo(currentTime - 5);
       }
     },
-    [currentTime, seekTo]
+    [currentTime, playable, seekTo]
   );
 
   const VolumeIcon =
     effectiveVolume === 0 ? VolumeX : effectiveVolume < 0.5 ? Volume1 : Volume2;
 
   return (
-    <footer
-      aria-label="Audio player controls"
-      className="h-[88px] shrink-0 bg-[#09090B]/95 backdrop-blur-xl border-t border-white/[0.08] px-3 sm:px-5 flex items-center justify-between gap-3 sm:gap-6 z-30 select-none"
-    >
-      {/* Left: Active Track Identity */}
-      <div className="flex items-center gap-3 min-w-0 w-[30%] max-w-[280px]">
-        <button
-          type="button"
-          onClick={() => {
-            if (currentPlaylistId) {
-              setActiveView({ type: 'playlist', playlistId: currentPlaylistId });
-            }
-          }}
-          className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg overflow-hidden shrink-0 border border-white/10 hover:opacity-90 transition-opacity focus-visible:outline-2 focus-visible:outline-[#1ED760]"
-          aria-label={`View playlist for ${currentTrack.title}`}
+    <div className="relative z-30 shrink-0">
+      {/* Dismissible Playback Error Banner */}
+      {playbackError && (
+        <div
+          role="alert"
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-[calc(100%-2rem)] max-w-xl flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-[#2A1B1D] border border-[#ffb4ab]/30 text-xs text-[#ffdad6] shadow-2xl"
         >
-          <CoverImage
-            src={currentTrack.coverUrl}
-            alt={currentTrack.title}
-            accentColor={currentTrack.accentColor}
-            className="w-full h-full"
-          />
-        </button>
-
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold text-white truncate">
-            {currentTrack.title}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <AlertCircle className="w-4 h-4 text-[#ffb4ab] shrink-0" />
+            <span className="truncate">{playbackError}</span>
           </div>
-          <div className="text-xs text-[#A1A1AA] truncate">
-            {currentTrack.artist}
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => toggleLike(currentTrack.id)}
-          aria-label={liked ? 'Unlike current track' : 'Like current track'}
-          className={`hidden sm:flex p-1.5 rounded-full transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
-            liked ? 'text-[#1ED760]' : 'text-[#A1A1AA] hover:text-white'
-          }`}
-        >
-          <Heart className={`w-4 h-4 ${liked ? 'fill-current' : ''}`} />
-        </button>
-      </div>
-
-      {/* Center: Playback Controls & Progress Seek Bar */}
-      <div className="flex flex-col items-center justify-center flex-1 max-w-xl gap-1.5">
-        <div className="flex items-center gap-3 sm:gap-5">
           <button
             type="button"
-            onClick={toggleShuffle}
-            aria-label={isShuffle ? 'Disable shuffle' : 'Enable shuffle'}
-            aria-pressed={isShuffle}
-            className={`relative p-1.5 rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
-              isShuffle ? 'text-[#1ED760]' : 'text-[#A1A1AA] hover:text-white'
-            }`}
-            title="Shuffle"
+            onClick={clearPlaybackError}
+            aria-label="Dismiss playback error"
+            className="p-1 rounded-md text-[#ffdad6]/80 hover:text-white hover:bg-white/10 transition-colors shrink-0"
           >
-            <Shuffle className="w-4 h-4" />
-          </button>
-
-          <button
-            type="button"
-            onClick={prevTrack}
-            aria-label="Previous track"
-            className="p-1.5 rounded-full text-[#E5E1E4] hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760]"
-            title="Previous"
-          >
-            <SkipBack className="w-5 h-5 fill-current" />
-          </button>
-
-          <button
-            type="button"
-            onClick={togglePlayPause}
-            aria-label={isPlaying ? 'Pause' : 'Play'}
-            className="w-9 h-9 rounded-full flex items-center justify-center bg-white text-[#09090B] hover:scale-105 active:scale-95 transition-transform focus-visible:outline-2 focus-visible:outline-[#1ED760]"
-            title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-          >
-            {isBuffering && isPlaying ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : isPlaying ? (
-              <Pause className="w-4 h-4 fill-current" />
-            ) : (
-              <Play className="w-4 h-4 fill-current ml-0.5" />
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={nextTrack}
-            aria-label="Next track"
-            className="p-1.5 rounded-full text-[#E5E1E4] hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760]"
-            title="Next"
-          >
-            <SkipForward className="w-5 h-5 fill-current" />
-          </button>
-
-          <button
-            type="button"
-            onClick={cycleRepeatMode}
-            aria-label={`Repeat mode: ${repeatMode}`}
-            className={`relative p-1.5 rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
-              repeatMode !== 'off'
-                ? 'text-[#1ED760]'
-                : 'text-[#A1A1AA] hover:text-white'
-            }`}
-            title={`Repeat: ${repeatMode}`}
-          >
-            {repeatMode === 'one' ? (
-              <Repeat1 className="w-4 h-4" />
-            ) : (
-              <Repeat className="w-4 h-4" />
-            )}
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
+      )}
 
-        {/* Interactive Scrub Bar */}
-        <div className="w-full flex items-center gap-2.5">
-          <span className="text-[11px] text-[#A1A1AA] tabular-nums w-9 text-right shrink-0">
-            {formatTime(displayedTime)}
-          </span>
-
-          <div
-            ref={progressBarRef}
-            role="slider"
-            tabIndex={0}
-            aria-label="Playback progress"
-            aria-valuemin={0}
-            aria-valuemax={Math.round(duration)}
-            aria-valuenow={Math.round(displayedTime)}
-            onPointerDown={handleProgressPointerDown}
-            onKeyDown={handleProgressKeyDown}
-            className="group relative flex-1 h-4 flex items-center cursor-pointer focus-visible:outline-2 focus-visible:outline-[#1ED760] rounded-full"
-          >
-            <div className="w-full h-1 rounded-full bg-white/15 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-colors ${
-                  isSeeking ? 'bg-[#4cf479]' : 'bg-white group-hover:bg-[#1ED760]'
-                }`}
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
-            <div
-              className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-white shadow-md transition-opacity ${
-                isSeeking ? 'opacity-100 scale-110' : 'opacity-0 group-hover:opacity-100'
-              }`}
-              style={{ left: `${progressPercent}%` }}
-            />
-          </div>
-
-          <span className="text-[11px] text-[#A1A1AA] tabular-nums w-9 shrink-0">
-            {formatTime(duration)}
-          </span>
-        </div>
-      </div>
-
-      {/* Right: Now Playing Toggle & Volume Controls */}
-      <div className="hidden sm:flex items-center justify-end gap-3 w-[30%] max-w-[260px]">
-        <button
-          type="button"
-          onClick={() => setIsNowPlayingOpen((prev) => !prev)}
-          aria-label="Toggle Now Playing queue panel"
-          aria-pressed={isNowPlayingOpen}
-          title="Now Playing & Queue"
-          className={`p-2 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
-            isNowPlayingOpen
-              ? 'text-[#1ED760] bg-[#1ED760]/10'
-              : 'text-[#A1A1AA] hover:text-white hover:bg-white/5'
-          }`}
-        >
-          <ListMusic className="w-4 h-4" />
-        </button>
-
-        <div className="flex items-center gap-2 w-28 md:w-32">
+      <footer
+        aria-label="Audio player controls"
+        className="h-[88px] bg-[#09090B]/95 backdrop-blur-xl border-t border-white/[0.08] px-3 sm:px-5 flex items-center justify-between gap-3 sm:gap-6 select-none"
+      >
+        {/* Left: Active Track Identity */}
+        <div className="flex items-center gap-3 min-w-0 w-[30%] max-w-[280px]">
           <button
             type="button"
-            onClick={toggleMute}
-            aria-label={isMuted ? 'Unmute audio' : 'Mute audio'}
-            className="p-1.5 rounded-lg text-[#A1A1AA] hover:text-white transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[#1ED760]"
-            title={isMuted ? 'Unmute' : 'Mute'}
-          >
-            <VolumeIcon className="w-4 h-4" />
-          </button>
-
-          <div
-            ref={volumeBarRef}
-            role="slider"
-            tabIndex={0}
-            aria-label="Volume"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={volumePercent}
-            onPointerDown={handleVolumePointerDown}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
-                e.preventDefault();
-                setVolume(effectiveVolume + 0.08);
-              } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
-                e.preventDefault();
-                setVolume(effectiveVolume - 0.08);
+            onClick={() => {
+              if (currentPlaylistId) {
+                setActiveView({ type: 'playlist', playlistId: currentPlaylistId });
               }
             }}
-            className="group relative flex-1 h-4 flex items-center cursor-pointer focus-visible:outline-2 focus-visible:outline-[#1ED760] rounded-full"
+            className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg overflow-hidden shrink-0 border border-white/10 hover:opacity-90 transition-opacity focus-visible:outline-2 focus-visible:outline-[#1ED760]"
+            aria-label={`View playlist for ${currentTrack.title}`}
           >
-            <div className="w-full h-1 rounded-full bg-white/15 overflow-hidden">
+            <CoverImage
+              src={currentTrack.coverUrl}
+              alt={currentTrack.title}
+              accentColor={currentTrack.accentColor}
+              className="w-full h-full"
+            />
+          </button>
+
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-white truncate">
+              {currentTrack.title}
+            </div>
+            <div className="text-xs text-[#A1A1AA] truncate">
+              {currentTrack.artist}
+              {!playable && (
+                <span className="text-[#ffb4ab]"> · Unavailable</span>
+              )}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => toggleLike(currentTrack.id)}
+            aria-label={liked ? 'Unlike current track' : 'Like current track'}
+            className={`hidden sm:flex p-1.5 rounded-full transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
+              liked ? 'text-[#1ED760]' : 'text-[#A1A1AA] hover:text-white'
+            }`}
+          >
+            <Heart className={`w-4 h-4 ${liked ? 'fill-current' : ''}`} />
+          </button>
+        </div>
+
+        {/* Center: Playback Controls & Progress Seek Bar */}
+        <div className="flex flex-col items-center justify-center flex-1 max-w-xl gap-1.5">
+          <div className="flex items-center gap-3 sm:gap-5">
+            <button
+              type="button"
+              onClick={toggleShuffle}
+              aria-label={isShuffle ? 'Disable shuffle' : 'Enable shuffle'}
+              aria-pressed={isShuffle}
+              className={`relative p-1.5 rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
+                isShuffle ? 'text-[#1ED760]' : 'text-[#A1A1AA] hover:text-white'
+              }`}
+              title="Shuffle"
+            >
+              <Shuffle className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={prevTrack}
+              aria-label="Previous track"
+              className="p-1.5 rounded-full text-[#E5E1E4] hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760]"
+              title="Previous"
+            >
+              <SkipBack className="w-5 h-5 fill-current" />
+            </button>
+
+            <button
+              type="button"
+              onClick={togglePlayPause}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-transform focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
+                playable
+                  ? 'bg-white text-[#09090B] hover:scale-105 active:scale-95'
+                  : 'bg-white/25 text-[#09090B]/70'
+              }`}
+              title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+            >
+              {isBuffering && isPlaying ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : isPlaying ? (
+                <Pause className="w-4 h-4 fill-current" />
+              ) : (
+                <Play className="w-4 h-4 fill-current ml-0.5" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={nextTrack}
+              aria-label="Next track"
+              className="p-1.5 rounded-full text-[#E5E1E4] hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760]"
+              title="Next"
+            >
+              <SkipForward className="w-5 h-5 fill-current" />
+            </button>
+
+            <button
+              type="button"
+              onClick={cycleRepeatMode}
+              aria-label={`Repeat mode: ${repeatMode}`}
+              className={`relative p-1.5 rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
+                repeatMode !== 'off'
+                  ? 'text-[#1ED760]'
+                  : 'text-[#A1A1AA] hover:text-white'
+              }`}
+              title={`Repeat: ${repeatMode}`}
+            >
+              {repeatMode === 'one' ? (
+                <Repeat1 className="w-4 h-4" />
+              ) : (
+                <Repeat className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+
+          {/* Interactive Scrub Bar */}
+          <div className="w-full flex items-center gap-2.5">
+            <span className="text-[11px] text-[#A1A1AA] tabular-nums w-9 text-right shrink-0">
+              {formatTime(displayedTime)}
+            </span>
+
+            <div
+              ref={progressBarRef}
+              role="slider"
+              tabIndex={0}
+              aria-label="Playback progress"
+              aria-valuemin={0}
+              aria-valuemax={Math.round(duration)}
+              aria-valuenow={Math.round(displayedTime)}
+              onPointerDown={handleProgressPointerDown}
+              onKeyDown={handleProgressKeyDown}
+              className={`group relative flex-1 h-4 flex items-center focus-visible:outline-2 focus-visible:outline-[#1ED760] rounded-full ${
+                playable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
+              }`}
+            >
+              <div className="w-full h-1 rounded-full bg-white/15 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-colors ${
+                    isSeeking ? 'bg-[#4cf479]' : 'bg-white group-hover:bg-[#1ED760]'
+                  }`}
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
               <div
-                className={`h-full rounded-full transition-colors ${
-                  isDraggingVolume ? 'bg-[#4cf479]' : 'bg-white group-hover:bg-[#1ED760]'
+                className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-white shadow-md transition-opacity ${
+                  isSeeking ? 'opacity-100 scale-110' : 'opacity-0 group-hover:opacity-100'
                 }`}
-                style={{ width: `${volumePercent}%` }}
+                style={{ left: `${progressPercent}%` }}
               />
             </div>
-            <div
-              className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white shadow-md transition-opacity ${
-                isDraggingVolume
-                  ? 'opacity-100 scale-110'
-                  : 'opacity-0 group-hover:opacity-100'
-              }`}
-              style={{ left: `${volumePercent}%` }}
-            />
+
+            <span className="text-[11px] text-[#A1A1AA] tabular-nums w-9 shrink-0">
+              {duration > 0 ? formatTime(duration) : '--:--'}
+            </span>
           </div>
         </div>
-      </div>
-    </footer>
+
+        {/* Right: Now Playing Toggle & Volume Controls */}
+        <div className="hidden sm:flex items-center justify-end gap-3 w-[30%] max-w-[260px]">
+          <button
+            type="button"
+            onClick={() => setIsNowPlayingOpen((prev) => !prev)}
+            aria-label="Toggle Now Playing queue panel"
+            aria-pressed={isNowPlayingOpen}
+            title="Now Playing & Queue"
+            className={`p-2 rounded-lg transition-colors focus-visible:outline-2 focus-visible:outline-[#1ED760] ${
+              isNowPlayingOpen
+                ? 'text-[#1ED760] bg-[#1ED760]/10'
+                : 'text-[#A1A1AA] hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <ListMusic className="w-4 h-4" />
+          </button>
+
+          <div className="flex items-center gap-2 w-28 md:w-32">
+            <button
+              type="button"
+              onClick={toggleMute}
+              aria-label={isMuted ? 'Unmute audio' : 'Mute audio'}
+              className="p-1.5 rounded-lg text-[#A1A1AA] hover:text-white transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[#1ED760]"
+              title={isMuted ? 'Unmute' : 'Mute'}
+            >
+              <VolumeIcon className="w-4 h-4" />
+            </button>
+
+            <div
+              ref={volumeBarRef}
+              role="slider"
+              tabIndex={0}
+              aria-label="Volume"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={volumePercent}
+              onPointerDown={handleVolumePointerDown}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setVolume(effectiveVolume + 0.08);
+                } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setVolume(effectiveVolume - 0.08);
+                }
+              }}
+              className="group relative flex-1 h-4 flex items-center cursor-pointer focus-visible:outline-2 focus-visible:outline-[#1ED760] rounded-full"
+            >
+              <div className="w-full h-1 rounded-full bg-white/15 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-colors ${
+                    isDraggingVolume ? 'bg-[#4cf479]' : 'bg-white group-hover:bg-[#1ED760]'
+                  }`}
+                  style={{ width: `${volumePercent}%` }}
+                />
+              </div>
+              <div
+                className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-white shadow-md transition-opacity ${
+                  isDraggingVolume
+                    ? 'opacity-100 scale-110'
+                    : 'opacity-0 group-hover:opacity-100'
+                }`}
+                style={{ left: `${volumePercent}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
   );
 }

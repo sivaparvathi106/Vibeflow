@@ -7,13 +7,13 @@ export interface Track {
   album: string;
   genre: string;
   durationSec: number;
-  audioUrl: string;
+  audioUrl: string | null;
   coverUrl: string;
   accentColor: string;
-  bpm: number;
-  musicalKey: string;
-  /** Base frequency in Hz for seamless Web Audio synth fallback when external audio is unavailable */
-  synthRootHz: number;
+  bpm?: number;
+  musicalKey?: string;
+  isUploaded?: boolean;
+  isAvailable?: boolean;
 }
 
 export interface Playlist {
@@ -26,6 +26,7 @@ export interface Playlist {
   category: string;
   isSystem?: boolean;
   isCustom?: boolean;
+  isUploads?: boolean;
 }
 
 export interface GenreCategory {
